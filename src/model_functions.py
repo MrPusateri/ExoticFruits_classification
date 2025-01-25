@@ -6,19 +6,22 @@ model evaluation. In particular, the functions are:
 - cv_bestK, returns a metrics DataFrame for models with different
     numbers of neighbours.
 """
-from sklearn.metrics import accuracy_score, log_loss
-from sklearn.model_selection import KFold, StratifiedKFold
+import sklearn
+from sklearn.metrics import accuracy_score, log_loss, classification_report
+from sklearn.model_selection import KFold, StratifiedKFold, RandomizedSearchCV
 from sklearn.neighbors import KNeighborsClassifier
 
 import numpy as np
 import pandas as pd
+import sklearn.pipeline
 
 
-def evaluate_classification(mdl, dataset):
+def evaluate_classification(mdl, dataset, flag_show_report=False):
     """
     Function that returns both the accuracy score and the log
     loss of a classification model. To compute the log loss is
     necessary to use a model with the method predict_proba().
+
 
     Arguments:
     ---
@@ -27,11 +30,17 @@ def evaluate_classification(mdl, dataset):
     * dataset (tuple), tuple of two elements that have as first
         argument the features array and as the second argument
         the target array.
+    * flag_show_report (bool, default=False), if True the
+        function print on the standard output the classification
+        report.
     """
     X, y = dataset
 
     y_pred = mdl.predict(X)
     y_proba = mdl.predict_proba(X)
+
+    if flag_show_report:
+        print(classification_report(y_true=y, y_pred=y_pred))
     
     return accuracy_score(y_true=y, y_pred=y_pred),\
         log_loss(y_true=y, y_pred=y_proba)
@@ -156,7 +165,8 @@ def custom_classification_cv(clf_mdl, X, y, splitter, preprocessor):
 
         # evaluate performances
         tr_acc, tr_loss = evaluate_classification(mdl=clf_mdl,
-                                                dataset=(X_train, y_train))
+                                                  dataset=(X_train, y_train))
+        
         tst_acc, tst_loss = evaluate_classification(mdl=clf_mdl,
                                                     dataset=(X_test, y_test))
         
@@ -205,3 +215,57 @@ def evaluate_knn(n_neighbors, train_ds, test_ds, knn_weight='uniform'):
           f"\tTEST:\n\t- accuracy: {knn_test_accuracy:.2%}\n",
           f"\t- loss: {knn_test_loss:.4f}")
     return knn
+
+def apply_random_search(params_dist: dict, model_pipeline: sklearn.pipeline.Pipeline, dataset: tuple,
+                        random_state: int=19, n_iter: int=100, n_splits: int=5,
+                        flag_balance_splits: bool=True, scoring: str='f1'):
+    """
+    Function to apply a random search with cross validation.
+    In particular, it should be used with a Pipeline that contains
+    the preprocessing of the features in to avoid data leakage
+    issues.
+
+    Arguments:
+    ---
+    * params_dist (dict), dictionary that allow to modify the
+        parameters of the model in the pipeline used to solve the
+        task.
+    * model_pipeline (sklearn.pipeline.Pipeline), pipeline that
+        has the preprocessing of the data and the model to solve
+        the task.
+    * dataset (tuple), tuple of two elements that have as first
+        argument the features array and as the second argument
+        the target array.
+    * random_state (int, default=19), integer that represent the
+        random seed in order to obtain reprudicible results.
+    * n_iter (int, default=100), number of iteration in the
+        random search.
+    * n_splits (int, default=5), number of folds for the cross
+        validation process.
+    * flag_balance_splits (bool, default=True), if True the
+        function to split the train and test set during the
+        cross validation will split the data in order to have
+        balanced classes (classification).
+    * scoring='f1'
+    """
+    if flag_balance_splits:
+        splitter = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=random_state)
+    else:
+        # define splits object
+        splitter = KFold(n_splits=n_splits, shuffle=True, random_state=random_state)
+        
+    X, y = dataset
+    
+    random_search = RandomizedSearchCV(
+        model_pipeline,
+        param_distributions=params_dist,
+        n_iter=n_iter,
+        cv=splitter,
+        random_state=random_state,
+        scoring=scoring,
+        n_jobs=-1
+    )
+    
+    random_search.fit(X, y)
+    
+    return random_search.best_estimator_
