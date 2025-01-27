@@ -1,10 +1,19 @@
 """
 Python file that collects functions related to a KNeighborsClassifier
 model evaluation. In particular, the functions are:
+- create_my_preprocessing, specific function for the project that
+    return the specific processing ColumnTransformer.
 - evaluate_classification, return accuracy score and log loss for a
-    specific KNeighborsClassifier model.
+    classification model.
 - cv_bestK, returns a metrics DataFrame for models with different
     numbers of neighbours.
+- custom_classification_cv, return accuracy and log loss for a
+    classification model, applying cross-validation.
+- evaluate_knn, return a KNN model for a specific number of neighbours
+    and a method to weight points.
+- apply_random_search, return best model after a random search CV.
+- add_model_results, function to return DataFrame with specific for
+    a classification model.
 """
 import sklearn
 from sklearn.metrics import accuracy_score, log_loss, classification_report
@@ -15,6 +24,38 @@ import numpy as np
 import pandas as pd
 import sklearn.pipeline
 
+from sklearn.pipeline import Pipeline
+from sklearn.impute import SimpleImputer
+from sklearn.preprocessing import MinMaxScaler
+from sklearn.compose import ColumnTransformer
+
+def create_my_preprocessing():
+    """
+    Function that create a specific preprocessing ColumnTransformer
+    in order to create different objects with the same structure
+    along the code and obtain different preprocessing without the
+    knowledge of previous fitting.
+    """
+    # preprocess data
+    impute_and_scale_col_index = [3]
+    scale_col_index = [0, 1, 2, 4]
+
+    # define a pipeline to impute missing values and normalize data
+    impute_and_scale_pipeline = Pipeline(steps=[
+        ('imputer', SimpleImputer(strategy='mean', missing_values=np.nan)),
+        ('scaler', MinMaxScaler())
+    ])
+
+    # build column transformer to preprocess features
+    preprocessor = ColumnTransformer(
+        transformers=[
+            ('impute_and_scale', impute_and_scale_pipeline, impute_and_scale_col_index),
+            ('scaler', MinMaxScaler(), scale_col_index)
+        ],
+        remainder='passthrough'
+    )
+
+    return preprocessor
 
 def evaluate_classification(mdl, dataset, flag_show_report=False):
     """
@@ -177,12 +218,12 @@ def custom_classification_cv(clf_mdl, X, y, splitter, preprocessor):
     
     return train_accuracy, train_loss, test_accuracy, test_loss
 
-def evaluate_knn(n_neighbors, train_ds, test_ds, knn_weight='uniform'):
+def evaluate_knn(n_neighbors, train_ds, test_ds, knn_weight='uniform', flag_print=True):
     """
     Function that train a `KNeighborsClassifier` with a specific
     number of neighbors and the possibility to specify the argument
     `weights`. The function print the accuracy on training and test
-    set, and return the trained model.
+    set (if flag_print=True), and return the trained model.
 
     Arguments:
     ---
@@ -195,6 +236,7 @@ def evaluate_knn(n_neighbors, train_ds, test_ds, knn_weight='uniform'):
         second one is the target array.
     * knn_weight (default='uniform'), string that specify the method
         to adopt in order to assign weights to neighbors.
+    * flag_print (default=True), flag to print the results.
     """
     X_train, y_train = train_ds
     X_test, y_test = test_ds
@@ -209,16 +251,24 @@ def evaluate_knn(n_neighbors, train_ds, test_ds, knn_weight='uniform'):
         knn,
         (X_test, y_test)
     )
-    print(f"\nNumber of neighbours: {n_neighbors}\n",
-          f"\tTRAINING:\n\t- accuracy: {knn_train_accuracy:.2%}\n",
-          f"\t- loss: {knn_train_loss:.4f}\n",
-          f"\tTEST:\n\t- accuracy: {knn_test_accuracy:.2%}\n",
-          f"\t- loss: {knn_test_loss:.4f}")
+
+    if flag_print:
+        print(f"\nNumber of neighbours: {n_neighbors}\n",
+            f"\tTRAINING:\n\t- accuracy: {knn_train_accuracy:.2%}\n",
+            f"\t- loss: {knn_train_loss:.4f}\n",
+            f"\tTEST:\n\t- accuracy: {knn_test_accuracy:.2%}\n",
+            f"\t- loss: {knn_test_loss:.4f}")
     return knn
 
-def apply_random_search(params_dist: dict, model_pipeline: sklearn.pipeline.Pipeline, dataset: tuple,
-                        random_state: int=19, n_iter: int=100, n_splits: int=5,
-                        flag_balance_splits: bool=True, scoring: str='f1'):
+def apply_random_search(
+        params_dist: dict,
+        model_pipeline: sklearn.pipeline.Pipeline,
+        dataset: tuple,
+        random_state: int=19,
+        n_iter: int=100,
+        n_splits: int=5,
+        flag_balance_splits: bool=True,
+        scoring: str='f1'):
     """
     Function to apply a random search with cross validation.
     In particular, it should be used with a Pipeline that contains
@@ -249,10 +299,14 @@ def apply_random_search(params_dist: dict, model_pipeline: sklearn.pipeline.Pipe
     * scoring='f1'
     """
     if flag_balance_splits:
-        splitter = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=random_state)
+        splitter = StratifiedKFold(n_splits=n_splits,
+                                   shuffle=True,
+                                   random_state=random_state)
     else:
         # define splits object
-        splitter = KFold(n_splits=n_splits, shuffle=True, random_state=random_state)
+        splitter = KFold(n_splits=n_splits,
+                         shuffle=True,
+                         random_state=random_state)
         
     X, y = dataset
     
@@ -269,3 +323,38 @@ def apply_random_search(params_dist: dict, model_pipeline: sklearn.pipeline.Pipe
     random_search.fit(X, y)
     
     return random_search.best_estimator_
+
+def add_model_results(result_df, clf_model, model_name, dataset_type,
+                      train_ds, test_ds):
+    """
+    Function that add accuracy and loss for a classification model
+    to a results DataFrame.
+
+    Arguments:
+    ---
+    * result_df, dataframe where store results. 
+    * clf_model, classification model to test.
+    * model_name, name of the model.
+    * dataset_type, name of the dataset used.
+    * train_ds, (X_train, y_train)
+    * test_ds (X_test, y_test)
+    """
+    
+    train_accuracy, train_loss = evaluate_classification(clf_model,
+                                                         train_ds)
+    
+    test_accuracy, test_loss = evaluate_classification(clf_model,
+                                                       test_ds)
+    
+    if result_df.empty:
+        return pd.DataFrame(data=[[model_name, dataset_type, train_accuracy,
+                                  train_loss, test_accuracy, test_loss]],
+                            columns=['model_name', 'dataset_type', 'train_accuracy',
+                                     'train_loss', 'test_accuracy', 'test_loss'])
+    else:
+        new_df = pd.DataFrame(data=[[model_name, dataset_type, train_accuracy,
+                                    train_loss, test_accuracy, test_loss]],
+                              columns=['model_name', 'dataset_type', 'train_accuracy',
+                                       'train_loss', 'test_accuracy', 'test_loss'])
+        
+        return pd.concat([result_df, new_df], axis=0).reset_index(drop=True)
